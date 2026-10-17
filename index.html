@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>kirbynet</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<meta name="theme-color" content="#161629">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="conn" class="conn hidden">Sem conexão com o kirbynet. A janela do Python está aberta?</div>
+<div id="toast" class="toast hidden"></div>
+
+<!-- MENU -->
+<section id="menu" class="page hidden">
+  <header class="hero">
+    <div>
+      <h1>kirbynet <small class="ver">v0.9.2</small></h1>
+      <p class="sub">Link cable de GBA para até 4 jogadores · cada PC roda todos os GBAs, só os botões viajam</p>
+    </div>
+    <button id="btn-controls" class="ghost">🎮 Controles</button>
+  </header>
+
+  <div class="panel">
+    <div class="row">
+      <label>ROM</label>
+      <select id="rom"></select>
+      <label class="upload ghost-btn">Enviar ROM (.gba / .zip)<input id="upload" type="file" accept=".gba,.zip" hidden></label>
+    </div>
+    <div class="row">
+      <label>Nome</label>
+      <input id="name" maxlength="16" placeholder="Seu nome">
+    </div>
+  </div>
+
+  <div class="cards">
+    <article class="card" style="--c: var(--p1)">
+      <h2>🎮 Mesmo PC</h2>
+      <p>Até 4 GBAs nesta máquina. Cada jogador usa um teclado ou joystick (configure em Controles).</p>
+      <div class="grow"></div>
+      <div class="stepper"><span>Jogadores</span>
+        <button data-step="-1">−</button><b id="local-n">2</b><button data-step="1">+</button></div>
+      <button id="btn-local">Jogar aqui</button>
+    </article>
+    <article class="card" style="--c: var(--p2)">
+      <h2>📡 Hospedar</h2>
+      <p>Você vira o P1. Os outros PCs da mesma rede entram usando o seu IP.</p>
+      <div class="grow"></div>
+      <button id="btn-host">Criar sala</button>
+    </article>
+    <article class="card" style="--c: var(--p4)">
+      <h2>🔗 Entrar</h2>
+      <p>Vai entrar na sala de outro PC? Digite o IP dele (ou abra http://IP:8000 no navegador).</p>
+      <div class="grow"></div>
+      <input id="ip" placeholder="ex.: 192.168.0.15">
+      <button id="btn-join">Entrar na sala</button>
+    </article>
+  </div>
+  <p class="foot sub">Dica: no Chrome/Edge, menu ⋮ → “Instalar kirbynet” para abrir como app, sem barra do navegador.</p>
+</section>
+
+<!-- CONVIDADO (abriu a página pelo IP do host, sem Python) -->
+<section id="guest" class="page hidden">
+  <header class="hero">
+    <div>
+      <h1>kirbynet <small class="ver">v0.9.2</small></h1>
+      <p class="sub" id="g-sub">Você está entrando na sala do PC <b id="g-host"></b>. O jogo roda aqui no seu navegador; só os botões viajam.</p>
+    </div>
+    <button id="g-controls" class="ghost">🎮 Controles</button>
+  </header>
+  <div class="panel">
+    <div class="row"><label>Nome</label><input id="g-name" maxlength="16" placeholder="Seu nome"></div>
+    <div class="row"><label>ROM</label>
+      <span id="g-rom" class="sub grow">O jogo será carregado automaticamente ao entrar</span>
+      <label class="upload ghost-btn">Escolher ROM (.gba / .zip)<input id="g-file" type="file" accept=".gba,.zip" hidden></label>
+    </div>
+    <p class="sub">A ROM fica só no seu navegador (não é enviada a ninguém). Precisa ser a <b>mesma</b> do host.</p>
+  </div>
+  <div class="row">
+    <button id="g-join" style="background: var(--p4)">Entrar na sala</button>
+    <button id="g-solo" class="ghost">▶ Jogar sozinho</button>
+    <span id="g-msg" class="sub"></span>
+  </div>
+  <div id="g-players" class="players"></div>
+</section>
+
+<!-- SALA -->
+<section id="lobby" class="page hidden">
+  <h1>Sala de espera</h1>
+  <div id="lobby-host" class="hidden">
+    <p>Os outros abrem no navegador: <span id="guest-urls" class="ipbig"></span></p>
+    <p class="sub">(IP deste PC: <span id="ips"></span> · ninguém precisa instalar nada)</p>
+    <p class="sub">Se o Windows perguntar sobre o firewall do Python, clique em <b>Permitir</b> (rede privada).</p>
+  </div>
+  <p id="lobby-wait" class="sub hidden">Conectando ao host…</p>
+  <div id="players" class="players"></div>
+  <div id="lobby-start" class="row hidden">
+    <div class="stepper"><span>Atraso dos botões</span>
+      <button data-delay="-1">−</button><b id="delay">3</b><button data-delay="1">+</button><span>frames</span></div>
+    <span class="sub">3 = mesma casa · 8 = casas diferentes</span>
+    <label class="check" title="Botões direto de um navegador para o outro (UDP). Desligue só para comparar."><input type="checkbox" id="rtc" checked> Canal rápido</label>
+    <div class="grow"></div>
+    <button id="btn-start">Começar partida</button>
+  </div>
+  <button id="btn-leave-lobby" class="ghost">Voltar</button>
+</section>
+
+<!-- JOGO -->
+<section id="game" class="page hidden">
+  <div class="gamebar">
+    <div id="game-players" class="players small"></div>
+    <div class="grow"></div>
+    <button id="btn-all" class="ghost" title="F2">Ver todas</button>
+    <button id="btn-sound" class="ghost">🔊 Som</button>
+    <button id="btn-touch" class="ghost">📱 Botões de toque</button>
+    <button id="btn-controls2" class="ghost">🎮 Controles</button>
+    <button id="btn-fit" class="ghost" title="F3 — como a tela cheia preenche o monitor">🖼️ Esticar</button>
+    <button id="btn-full" class="ghost" title="F11 ou duplo clique">⛶ Tela cheia</button>
+    <button id="btn-leave" class="ghost">Sair</button>
+    <span class="ver menu-ver">kirbynet v0.9.2</span>
+  </div>
+  <div id="stage" class="stage"></div>
+  <div class="statusbar"><span id="status"></span><span id="desync" class="bad hidden"></span></div>
+  <!-- botões de toque (aparecem sozinhos em celular/tablet) — estilo emulador clássico:
+       em pé: jogo em cima e controles embaixo; deitado: jogo na tela toda e controles por cima -->
+  <div id="touch" class="touch hidden">
+    <button class="tb sh l" data-k="L">L</button>
+    <button class="tb sh r" data-k="R">R</button>
+    <button class="tb tmenu" aria-label="Menu">☰</button>
+    <div id="dpad" class="dpad">
+      <span class="arm up"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5 L19.5 17 H4.5 Z"/></svg></span><span class="arm down"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5 L19.5 17 H4.5 Z"/></svg></span>
+      <span class="arm left"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5 L19.5 17 H4.5 Z"/></svg></span><span class="arm right"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5 L19.5 17 H4.5 Z"/></svg></span>
+    </div>
+    <div class="abz">
+      <button class="tb round ab" data-k="AB">AB</button>
+      <button class="tb round b" data-k="B">B</button>
+      <button class="tb round a" data-k="A">A</button>
+    </div>
+    <div class="mid">
+      <button class="tb pill" data-k="Select" aria-label="Select"></button>
+      <button class="tb pill" data-k="Start" aria-label="Start"></button>
+    </div>
+  </div>
+</section>
+
+<!-- CONTROLES -->
+<div id="ctl" class="modal hidden">
+  <div class="modal-box">
+    <header class="row"><h2>Controles deste PC</h2><div class="grow"></div><button id="ctl-close" class="ghost">Fechar</button></header>
+    <p class="sub">Em rede, você usa o <b>Jogador 1</b> daqui. No “Mesmo PC”, cada jogador usa o seu. Fica salvo neste navegador.</p>
+    <div class="tabs" id="ctl-tabs"></div>
+    <div class="row">
+      <label>Dispositivo</label>
+      <select id="ctl-device"></select>
+      <span id="pad-info" class="sub"></span>
+    </div>
+    <div class="row"><label class="check"><input type="checkbox" id="ctl-stick"> Analógico esquerdo também mexe o direcional</label></div>
+    <div id="ctl-map" class="map"></div>
+    <div class="row"><button id="ctl-reset" class="ghost">Voltar ao padrão</button><div class="grow"></div>
+      <span id="ctl-live" class="sub"></span></div>
+  </div>
+</div>
+
+<script src="kncore.js"></script>
+<script src="app.js"></script>
+<script src="game.js"></script>
+<script src="guest.js"></script>
+<script>touchInit(); updateSoundButton(); if (!GUEST) connect();</script>
+</body>
+</html>

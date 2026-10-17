@@ -69,11 +69,15 @@ async function guestInit() {
   };
   $("g-join").onclick = guestJoin;
   $("g-solo").onclick = guestSolo;
+  $("g-create").onclick = guestCreate;
   if (SITE) {
     $("g-code-row").classList.remove("hidden");
+    $("g-create").classList.remove("hidden");
+    document.querySelectorAll(".pc-only").forEach(el => el.classList.add("hidden"));
+    $("code-label").textContent = "Código da sala (os outros digitam no site):";
     try { $("g-code").value = localStorage.getItem("kirbynet.code") || ""; } catch (e) {}
     $("g-sub").textContent = "A ROM e o save ficam guardados neste navegador, sozinho ou junto. "
-      + "Para jogar junto, digite o código que aparece na sala do host.";
+      + "Para jogar junto: um cria a sala e passa o código; os outros digitam o código e entram.";
     if (!Guest.rom) $("g-rom").textContent = "Escolha a ROM uma vez; ela fica guardada aqui";
   }
 }
@@ -97,7 +101,7 @@ async function guestSolo() {
 async function guestJoin() {
   // pelo site: entra com o código; a ROM é a escolhida aqui (o host confere se é a mesma)
   const code = SITE ? ($("g-code").value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "") : "";
-  if (SITE && !code) return toast("Digite o código da sala (aparece no PC do host).");
+  if (SITE && !code) return toast("Digite o código da sala (quem criou a sala vê o código na tela).");
   if (SITE && !Guest.rom) return toast("Escolha a ROM primeiro (a mesma do host).");
   if (SITE) try { localStorage.setItem("kirbynet.code", code); } catch (e) {}
   $("g-join").disabled = true;
@@ -123,29 +127,61 @@ async function guestJoin() {
   $("g-msg").textContent = "Carregando o motor…";
   try { await loadEngine(); } catch (err) { return showGuestPage("Não consegui carregar o motor: " + err); }
   $("g-msg").textContent = "Conectando à sala…";
-  const net = netJoin(SITE ? siteSocket(code) : `ws://${location.host}/net`,
-    { name, rom: Guest.romSha1, save: b64enc(loadMySave()) },
-    {
-      onLobby(names, slot) {
-        S = { mode: "net", my: slot };
-        badges($("g-players"), names, slot, 4);
-        $("g-msg").textContent = "Conectado! Esperando o host começar a partida…";
-      },
-      onStart(info) {
-        try {
-          startRun({ n: info.n, rom: Guest.rom, saves: info.saves.map(b64dec), names: info.names,
-                     net, slot: net.slot, delay: info.delay,
-                     onSave: guestSaveWriter() });
-        } catch (err) { toast(String(err.message || err)); net.close(); showGuestPage(String(err)); }
-      },
-      onError(msg) {
-        const wasPlaying = !!Play.run;
-        endRun();
-        toast(msg);
-        showGuestPage(wasPlaying ? msg + " Seu save ficou guardado neste navegador." : msg);
-        $("g-players").innerHTML = "";
-      },
-    });
+  netJoin(SITE ? siteSocket(code) : `ws://${location.host}/net`,
+    { name, rom: Guest.romSha1, save: b64enc(loadMySave()) }, roomCallbacks());
+}
+
+// O que fazer na sala (igual para quem entra e para quem cria pelo site)
+function roomCallbacks() {
+  return {
+    onLobby(names, slot) {
+      S = { mode: "net", my: slot };
+      badges($("g-players"), names, slot, 4);
+      $("g-msg").textContent = "Conectado! Esperando o host começar a partida…";
+    },
+    onStart(info) {
+      const net = Play.net;
+      try {
+        startRun({ n: info.n, rom: Guest.rom, saves: info.saves.map(b64dec), names: info.names,
+                   net, slot: net.slot, delay: info.delay,
+                   onSave: guestSaveWriter() });
+      } catch (err) { toast(String(err.message || err)); net.close(); showGuestPage(String(err)); }
+    },
+    onError(msg) {
+      const wasPlaying = !!Play.run;
+      endRun();
+      SiteRoom.close();
+      toast(msg);
+      showGuestPage(wasPlaying ? msg + " Seu save ficou guardado neste navegador." : msg);
+      $("g-players").innerHTML = "";
+    },
+  };
+}
+
+// Criar a sala pelo site: este navegador vira o host (sem Python) e entra nela como P1.
+async function guestCreate() {
+  if (!Guest.rom) return toast("Escolha a ROM primeiro.");
+  $("g-create").disabled = true;
+  $("g-msg").textContent = "Criando a sala…";
+  try {
+    await loadEngine();
+    await SiteRoom.create(Guest.romSha1, siteLobby);
+  } catch (err) {
+    SiteRoom.close();
+    $("g-create").disabled = false;
+    return showGuestPage(String(err.message || err));
+  }
+  $("g-create").disabled = false;
+  $("g-msg").textContent = "";
+  const name = ($("g-name").value || "").trim() || "Host";
+  try { localStorage.setItem("kirbynet.name", name); } catch (e) {}
+  netJoin(SiteRoom.localSocket(), { name, rom: Guest.romSha1, save: b64enc(loadMySave()) }, roomCallbacks());
+}
+// tela da sala de espera de quem criou pelo site (a mesma do host no PC)
+function siteLobby(m) {
+  if (!SiteRoom.on || Play.run) return;
+  showOnly("lobby");
+  renderLobby(m);
 }
 
 function guestLeave() {

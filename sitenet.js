@@ -117,3 +117,161 @@ const Bridge = {
     this.peer = null; this.code = null;
   },
 };
+
+// ---------------------------------------------------------------- sala no próprio navegador
+// Quem cria a sala pelo site é o host, sem Python: esta é a mesma sala do Room do kirbynet.py
+// (mesmas mensagens: H W L S I X D E P Q R), rodando aqui. O próprio host entra nela por um
+// "fio" interno (localSocket); os outros chegam pelo código.
+const enc = (s) => new TextEncoder().encode(s), dec = (u8) => new TextDecoder().decode(u8);
+function newCode() {
+  const abc = "ABCDEFGHJKMNPQRSTUVWXYZ23456789", r = crypto.getRandomValues(new Uint8Array(5));
+  return [...r].map(x => abc[x % abc.length]).join("");
+}
+function packMsg(kind, payload) {
+  const body = payload || new Uint8Array(0), b = new Uint8Array(1 + body.length);
+  b[0] = kind.charCodeAt(0); b.set(body, 1);
+  return b;
+}
+const SiteRoom = {
+  on: false, peer: null, code: null, sha1: "", players: [], running: false, hashes: new Map(), onState: null,
+  // sha1 = ROM do host; onState(estado) atualiza a tela da sala
+  create(sha1, onState) {
+    this.close();
+    Object.assign(this, { on: true, sha1, onState, players: [], running: false, hashes: new Map() });
+    if (typeof Peer === "undefined") return Promise.reject(new Error("Não consegui carregar a conexão por código."));
+    return this.listen(0);
+  },
+  listen(tries) {
+    this.code = newCode();
+    const peer = this.peer = new Peer(SITE_PREFIX + this.code, { debug: 0 });
+    return new Promise((ok, bad) => {
+      peer.on("open", () => { ok(); this.push(); });
+      peer.on("connection", (pc) => this.remote(pc));
+      peer.on("disconnected", () => {
+        // caiu do "apresentador" (internet piscou): quem já entrou continua; tenta voltar para os próximos
+        setTimeout(() => { if (this.peer === peer && !peer.destroyed) try { peer.reconnect(); } catch (e) {} }, 3000);
+      });
+      peer.on("error", (e) => {
+        if (this.peer !== peer || peer.open) return;
+        if (e.type === "unavailable-id" && tries < 3) { peer.destroy(); this.listen(tries + 1).then(ok, bad); }
+        else bad(new Error(["network", "server-error", "socket-error", "socket-closed"].includes(e.type)
+          ? "Sem internet para criar a sala." : "Não consegui criar a sala (" + e.type + ")."));
+      });
+    });
+  },
+  // um jogador que chegou pelo código
+  remote(pc) {
+    const c = { closed: false, local: false };
+    c.send = (kind, payload) => {
+      if (c.closed) return;
+      try { chunkSend(pc, packMsg(kind, payload)); } catch (e) {}
+    };
+    c.close = () => { if (!c.closed) { c.closed = true; setTimeout(() => { try { pc.close({ flush: true }); } catch (e) {} }, 300); } };
+    pc.on("data", chunkReader(buf => this.msg(c, new Uint8Array(buf))));
+    pc.on("close", () => this.gone(c));
+    pc.on("error", () => this.gone(c));
+  },
+  // o próprio host: um objeto que se comporta como WebSocket, ligado direto na sala
+  localSocket() {
+    const t = { readyState: 0, binaryType: "arraybuffer", onopen: null, onmessage: null, onclose: null };
+    const c = { closed: false, local: true };
+    c.send = (kind, payload) => {
+      if (c.closed) return;
+      const b = packMsg(kind, payload);
+      queueMicrotask(() => { if (t.readyState === 1 && t.onmessage) t.onmessage({ data: b.buffer }); });
+    };
+    c.close = () => {
+      if (c.closed) return;
+      c.closed = true;
+      queueMicrotask(() => { if (t.readyState !== 3) { t.readyState = 3; if (t.onclose) t.onclose({ code: 1000, reason: "" }); } });
+    };
+    t.send = (u8) => { if (t.readyState === 1) { const b = u8.slice(); queueMicrotask(() => this.msg(c, b)); } };
+    t.close = () => { if (t.readyState !== 3) { t.readyState = 3; this.gone(c); } };
+    queueMicrotask(() => { t.readyState = 1; if (t.onopen) t.onopen(); });
+    return t;
+  },
+  names() { return this.players.map(p => p.name); },
+  broadcast(kind, payload, skip) { for (const p of this.players) if (p.c !== skip) p.c.send(kind, payload); },
+  msg(c, u8) {
+    if (c.closed || !this.on || !u8.length) return;
+    const kind = String.fromCharCode(u8[0]), data = u8.subarray(1);
+    const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const slot = this.players.findIndex(p => p.c === c);
+    const fail = (msg) => c.send("E", enc(JSON.stringify({ msg })));
+    if (kind === "H") {
+      let info; try { info = JSON.parse(dec(data)); } catch (e) { return; }
+      if (this.running) fail("A partida já começou.");
+      else if (info.rom !== this.sha1) fail("A sua ROM é diferente da do host. Todos precisam da MESMA ROM.");
+      else if (this.players.length >= 4) fail("A sala está cheia (4 jogadores).");
+      else if (slot < 0) {
+        const p = { name: String(info.name || "?").slice(0, 16), c, save: String(info.save || "") };
+        if (c.local) this.players.unshift(p); else this.players.push(p);   // o host é sempre o P1
+        console.log(`${p.name} entrou na sala`);
+        this.lobby();
+      }
+    } else if (kind === "I" && this.running) this.broadcast("I", data, c);
+    else if (kind === "P") c.send("P", data);
+    else if (kind === "Q") {
+      if (slot < 0) return;
+      let q; try { q = JSON.parse(dec(data)); } catch (e) { return; }
+      const int = (v, d) => Number.isFinite(+v) ? Math.trunc(+v) : d;
+      const out = { slot, med: int(q.med, 0), max: int(q.max, 0), spikes: int(q.spikes, 0), via: q.via === "udp" ? "udp" : "tcp",
+                    cpu: int(q.cpu, -1), page: int(q.page, -1), delay: int(q.delay, -1), lost: int(q.lost, 0), gap: int(q.gap, 0), marg: {} };
+      for (const [k, v] of Object.entries(q.marg && typeof q.marg === "object" ? q.marg : {}))
+        if (v && typeof v === "object") out.marg[String(int(k, 0))] = Object.fromEntries(["min", "late", "tight", "sum", "cnt"].map(f => [f, int(v[f], 0)]));
+      this.broadcast("Q", enc(JSON.stringify(out)));
+    } else if (kind === "R" && data.length) {
+      // só apresenta um navegador ao outro (canal rápido); os botões não passam por aqui
+      const to = data[0];
+      if (slot >= 0 && to < this.players.length) { const b = data.slice(); b[0] = slot; this.players[to].c.send("R", b); }
+    } else if (kind === "X" && this.running && data.length >= 13) {
+      const frame = dv.getUint32(1, true), h = dv.getBigUint64(5, true);
+      if (!this.hashes.has(frame)) this.hashes.set(frame, h);
+      else if (this.hashes.get(frame) !== h) {
+        console.warn(`DESSINCRONIZOU no frame ${frame} (P${data[0] + 1})`);
+        const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, frame, true);
+        this.broadcast("D", b);
+      }
+      for (const f of this.hashes.keys()) if (f < frame - 3000) this.hashes.delete(f);
+    }
+  },
+  lobby() {
+    this.players.forEach((p, i) => p.c.send("W", enc(JSON.stringify({ slot: i }))));
+    this.broadcast("L", enc(JSON.stringify({ players: this.names() })));
+    this.push();
+  },
+  gone(c) {
+    const slot = this.players.findIndex(p => p.c === c);
+    c.closed = true;
+    if (slot < 0) return;
+    const name = this.players[slot].name;
+    this.players.splice(slot, 1);
+    if (this.running) this.end(`P${slot + 1} (${name}) saiu. A partida parou — voltem para a sala.`);
+    else this.lobby();
+  },
+  start(delay, rtc) {
+    if (this.running || !this.players.length) return;
+    this.running = true; this.hashes = new Map();
+    const info = { n: this.players.length, delay, names: this.names(), rtc, saves: this.players.map(p => p.save) };
+    this.broadcast("S", enc(JSON.stringify(info)));
+    this.push();
+  },
+  // os mesmos comandos que a tela do host mandaria ao Python
+  handle(m) {
+    if (!this.on) return;
+    if (m.t === "start") this.start(Math.max(1, Math.min(12, +m.delay || 3)), m.rtc !== false);
+    else if (m.t === "leave") this.end("O host fechou a sala.");
+  },
+  end(msg) {
+    const players = this.players;
+    this.players = [];
+    for (const p of players) { p.c.send("E", enc(JSON.stringify({ msg }))); p.c.close(); }
+    this.close();
+  },
+  push() { if (this.on && this.onState) this.onState({ screen: this.running ? "playing" : "lobby", players: this.names(), code: this.code }); },
+  close() {
+    this.on = false; this.running = false;
+    if (this.peer) { const p = this.peer; setTimeout(() => { try { p.destroy(); } catch (e) {} }, 400); }
+    this.peer = null;
+  },
+};

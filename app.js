@@ -254,7 +254,10 @@ if (XBOX) {
 }
 
 // ------------------------------------------------------------------ conexão com o Python (só no PC do host)
-function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+function send(obj) {
+  if (SiteRoom.on) return SiteRoom.handle(obj);   // sala criada pelo site: ela mesma é o "Python"
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onopen = () => $("conn").classList.add("hidden");

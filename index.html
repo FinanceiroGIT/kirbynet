@@ -81,6 +81,7 @@
   </div>
   <div class="row">
     <button id="g-join" style="background: var(--p4)">Entrar na sala</button>
+    <button id="g-create" class="hidden" style="background: var(--p2)">🏠 Criar sala</button>
     <button id="g-solo" class="ghost">▶ Jogar sozinho</button>
     <span id="g-msg" class="sub"></span>
   </div>
@@ -91,10 +92,10 @@
 <section id="lobby" class="page hidden">
   <h1>Sala de espera</h1>
   <div id="lobby-host" class="hidden">
-    <p>Os outros abrem no navegador: <span id="guest-urls" class="ipbig"></span></p>
-    <p>Ou pelo site <b>financeirogit.github.io/kirbynet</b> com o código: <span id="room-code" class="ipbig"></span></p>
-    <p class="sub">(IP deste PC: <span id="ips"></span> · ninguém precisa instalar nada)</p>
-    <p class="sub">Se o Windows perguntar sobre o firewall do Python, clique em <b>Permitir</b> (rede privada).</p>
+    <p class="pc-only">Os outros abrem no navegador: <span id="guest-urls" class="ipbig"></span></p>
+    <p><span id="code-label">Ou pelo site <b>financeirogit.github.io/kirbynet</b> com o código:</span> <span id="room-code" class="ipbig"></span></p>
+    <p class="sub pc-only">(IP deste PC: <span id="ips"></span> · ninguém precisa instalar nada)</p>
+    <p class="sub pc-only">Se o Windows perguntar sobre o firewall do Python, clique em <b>Permitir</b> (rede privada).</p>
   </div>
   <p id="lobby-wait" class="sub hidden">Conectando ao host…</p>
   <div id="players" class="players"></div>

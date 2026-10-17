@@ -75,9 +75,10 @@
     <div class="row hidden" id="g-code-row"><label>Código da sala</label><input id="g-code" maxlength="5" placeholder="ex.: K7P2Q" autocapitalize="characters" autocomplete="off"></div>
     <div class="row"><label>ROM</label>
       <span id="g-rom" class="sub grow">O jogo será carregado automaticamente ao entrar</span>
-      <label class="upload ghost-btn">Escolher ROM (.gba / .zip)<input id="g-file" type="file" accept=".gba,.zip" hidden></label>
+      <select id="g-library" aria-label="Jogo disponível no site"><option value="">Carregando jogos…</option></select>
+      <input id="g-file" type="file" accept=".gba,.zip" hidden>
     </div>
-    <p class="sub">A ROM fica só no seu navegador. Quem entra numa sala recebe o jogo direto de quem criou (não precisa escolher).</p>
+    <p class="sub">Escolha um jogo da lista. Quem entra numa sala recebe o jogo automaticamente de quem criou.</p>
   </div>
   <div id="g-rooms" class="panel hidden">
     <p><b>Salas nesta internet</b> <span id="g-rooms-msg" class="sub">procurando…</span></p>

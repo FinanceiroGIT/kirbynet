@@ -47,6 +47,52 @@ function setRom(name, bytes) {
   $("g-rom").textContent = `${name}  ·  ${(bytes.length / 1048576).toFixed(1)} MB`;
 }
 
+// Catálogo publicado junto com o site, usando caminhos relativos ao GitHub Pages.
+let libraryRequest = 0;
+async function loadLibraryRom() {
+  const request = ++libraryRequest;
+  const name = $("g-library").value;
+  Guest.rom = null;
+  $("g-solo").disabled = true;
+  $("g-create").disabled = true;
+  if (!name) { $("g-rom").textContent = "Nenhum jogo disponível."; return; }
+  $("g-rom").textContent = "Carregando " + name + "…";
+  try {
+    const response = await fetch(new URL("roms/" + encodeURIComponent(name), location.href));
+    if (!response.ok) throw new Error("Falha ao baixar o jogo (" + response.status + ").");
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (request !== libraryRequest) return;
+    setRom(name, bytes);
+    await romStore({ name, bytes });
+  } catch (err) {
+    if (request === libraryRequest) $("g-rom").textContent = "Não consegui carregar: " + err.message;
+  } finally {
+    if (request === libraryRequest) {
+      $("g-solo").disabled = !Guest.rom;
+      $("g-create").disabled = !Guest.rom;
+    }
+  }
+}
+async function initLibrary() {
+  const select = $("g-library");
+  select.onchange = loadLibraryRom;
+  try {
+    const response = await fetch(new URL("roms/index.json", location.href), { cache: "no-store" });
+    if (!response.ok) throw new Error("Catálogo indisponível.");
+    const games = await response.json();
+    select.replaceChildren(...games.map(game => new Option(game.name.replace(/\.gba$/i, ""), game.file)));
+    if (!games.length) select.add(new Option("Nenhum jogo disponível", ""));
+    if (games.some(game => game.file === Guest.romName)) select.value = Guest.romName;
+    await loadLibraryRom();
+  } catch (err) {
+    select.replaceChildren(new Option("Não foi possível listar os jogos", ""));
+    Guest.rom = null;
+    $("g-rom").textContent = err.message;
+    $("g-solo").disabled = true;
+    $("g-create").disabled = true;
+  }
+}
+
 async function guestInit() {
   $("g-host").textContent = location.host;
   try { $("g-name").value = localStorage.getItem("kirbynet.name") || ""; } catch (e) {}
@@ -82,9 +128,9 @@ async function guestInit() {
     document.querySelectorAll(".pc-only").forEach(el => el.classList.add("hidden"));
     $("code-label").textContent = "Quem está na mesma internet já vê esta sala no site. De outra casa, passe o código:";
     try { $("g-code").value = localStorage.getItem("kirbynet.code") || ""; } catch (e) {}
-    $("g-sub").textContent = "A ROM e o save ficam guardados neste navegador, sozinho ou junto. "
+    $("g-sub").textContent = "Escolha um jogo da lista. O save fica guardado neste navegador. "
       + "Para jogar junto: um aperta “Criar sala” e os outros tocam na sala que aparece aqui.";
-    if (!Guest.rom) $("g-rom").textContent = "Escolha a ROM uma vez; ela fica guardada aqui";
+    await initLibrary();
   }
 }
 
@@ -131,6 +177,7 @@ async function guestJoin(roomCode) {
   const code = SITE ? (typed ? $("g-code").value || "" : roomCode).trim().toUpperCase().replace(/[^A-Z0-9]/g, "") : "";
   if (SITE && !code) return toast("Digite o código da sala (quem criou a sala vê o código na tela).");
   if (SITE && typed) try { localStorage.setItem("kirbynet.code", code); } catch (e) {}
+  ++libraryRequest;
   $("g-join").disabled = true;
   $("g-msg").textContent = "Carregando o jogo do host…";
   // pelo site: o jogo vem de quem criou a sala (só baixa se ainda não for o mesmo)

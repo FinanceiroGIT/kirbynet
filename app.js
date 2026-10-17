@@ -268,6 +268,7 @@ function applyState(m) {
   HS = m;
   if (m.error && m.error !== lastError) toast(m.error);
   lastError = m.error;
+  Bridge.sync(m.screen !== "menu" ? m.code : null);   // quem entra pelo site, com o código
   if (Play.run) return;                       // jogando: a tela de jogo manda
   if (m.screen === "menu") { showOnly("menu"); renderMenu(m); }
   else { showOnly("lobby"); renderLobby(m); }
@@ -299,6 +300,7 @@ function renderLobby(m) {
   $("lobby-start").classList.toggle("hidden", m.screen !== "lobby");
   $("ips").textContent = (m.ips || []).join("  ou  ");
   $("guest-urls").textContent = (m.guest_urls || []).join("  ou  ");
+  $("room-code").textContent = m.code || "";
   S = { mode: "net", my: 0 };
   badges($("players"), m.players, 0, 4);
 }

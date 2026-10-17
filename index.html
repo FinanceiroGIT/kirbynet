@@ -72,6 +72,7 @@
   </header>
   <div class="panel">
     <div class="row"><label>Nome</label><input id="g-name" maxlength="16" placeholder="Seu nome"></div>
+    <div class="row hidden" id="g-code-row"><label>Código da sala</label><input id="g-code" maxlength="5" placeholder="ex.: K7P2Q" autocapitalize="characters" autocomplete="off"></div>
     <div class="row"><label>ROM</label>
       <span id="g-rom" class="sub grow">O jogo será carregado automaticamente ao entrar</span>
       <label class="upload ghost-btn">Escolher ROM (.gba / .zip)<input id="g-file" type="file" accept=".gba,.zip" hidden></label>
@@ -91,6 +92,7 @@
   <h1>Sala de espera</h1>
   <div id="lobby-host" class="hidden">
     <p>Os outros abrem no navegador: <span id="guest-urls" class="ipbig"></span></p>
+    <p>Ou pelo site <b>financeirogit.github.io/kirbynet</b> com o código: <span id="room-code" class="ipbig"></span></p>
     <p class="sub">(IP deste PC: <span id="ips"></span> · ninguém precisa instalar nada)</p>
     <p class="sub">Se o Windows perguntar sobre o firewall do Python, clique em <b>Permitir</b> (rede privada).</p>
   </div>
@@ -164,6 +166,8 @@
 </div>
 
 <script src="kncore.js"></script>
+<script src="peerjs.min.js"></script>
+<script src="sitenet.js"></script>
 <script src="app.js"></script>
 <script src="game.js"></script>
 <script src="guest.js"></script>

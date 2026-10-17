@@ -399,8 +399,9 @@ function showOnly(id) {
 
 // ------------------------------------------------------------------ rede
 // Entra numa sala. cb: onLobby(names, slot), onStart(info), onError(msg)
+// url: endereço ws://, ou um objeto que se comporta como WebSocket (siteSocket: entrar pelo código)
 function netJoin(url, hello, cb) {
-  const ws = new WebSocket(url);
+  const ws = typeof url === "string" ? new WebSocket(url) : url;
   ws.binaryType = "arraybuffer";
   const net = { ws, cb, slot: 0, sink: null, early: [], gotError: false };
   Play.net = net;
@@ -608,7 +609,7 @@ function netJoin(url, hello, cb) {
     if (Play.net === net) Play.net = null;
     cb.onError(Play.run ? "A conexão com o host caiu."
       : net.opened ? "A sala fechou a conexão logo depois de entrar (veja a janela preta do host)."
-      : "Não consegui falar com a sala (o host fechou ou a rede caiu).");
+      : ev.reason || "Não consegui falar com a sala (o host fechou ou a rede caiu).");
   };
   return net;
 }

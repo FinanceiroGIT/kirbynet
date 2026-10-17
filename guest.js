@@ -70,9 +70,10 @@ async function guestInit() {
   $("g-join").onclick = guestJoin;
   $("g-solo").onclick = guestSolo;
   if (SITE) {
-    $("g-join").classList.add("hidden");
-    $("g-sub").textContent = "Jogando sozinho: a ROM e o save ficam guardados neste navegador. "
-      + "Para jogar junto, abra o endereço do PC do host (http://IP:8000).";
+    $("g-code-row").classList.remove("hidden");
+    try { $("g-code").value = localStorage.getItem("kirbynet.code") || ""; } catch (e) {}
+    $("g-sub").textContent = "A ROM e o save ficam guardados neste navegador, sozinho ou junto. "
+      + "Para jogar junto, digite o código que aparece na sala do host.";
     if (!Guest.rom) $("g-rom").textContent = "Escolha a ROM uma vez; ela fica guardada aqui";
   }
 }
@@ -94,9 +95,14 @@ async function guestSolo() {
 }
 
 async function guestJoin() {
+  // pelo site: entra com o código; a ROM é a escolhida aqui (o host confere se é a mesma)
+  const code = SITE ? ($("g-code").value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "") : "";
+  if (SITE && !code) return toast("Digite o código da sala (aparece no PC do host).");
+  if (SITE && !Guest.rom) return toast("Escolha a ROM primeiro (a mesma do host).");
+  if (SITE) try { localStorage.setItem("kirbynet.code", code); } catch (e) {}
   $("g-join").disabled = true;
   $("g-msg").textContent = "Carregando o jogo do host…";
-  try {
+  if (!SITE) try {
     const response = await fetch("/guest-rom");
     if (!response.ok) throw new Error(await response.text());
     const info = await response.json();
@@ -117,7 +123,7 @@ async function guestJoin() {
   $("g-msg").textContent = "Carregando o motor…";
   try { await loadEngine(); } catch (err) { return showGuestPage("Não consegui carregar o motor: " + err); }
   $("g-msg").textContent = "Conectando à sala…";
-  const net = netJoin(`ws://${location.host}/net`,
+  const net = netJoin(SITE ? siteSocket(code) : `ws://${location.host}/net`,
     { name, rom: Guest.romSha1, save: b64enc(loadMySave()) },
     {
       onLobby(names, slot) {

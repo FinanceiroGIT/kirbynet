@@ -102,10 +102,21 @@ async function guestJoin() {
   // pelo site: entra com o código; a ROM é a escolhida aqui (o host confere se é a mesma)
   const code = SITE ? ($("g-code").value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "") : "";
   if (SITE && !code) return toast("Digite o código da sala (quem criou a sala vê o código na tela).");
-  if (SITE && !Guest.rom) return toast("Escolha a ROM primeiro (a mesma do host).");
   if (SITE) try { localStorage.setItem("kirbynet.code", code); } catch (e) {}
   $("g-join").disabled = true;
   $("g-msg").textContent = "Carregando o jogo do host…";
+  // pelo site: o jogo vem de quem criou a sala (só baixa se ainda não for o mesmo)
+  if (SITE) try {
+    $("g-msg").textContent = "Buscando o jogo na sala… (na 1ª vez baixa do host, pode levar um minuto)";
+    const r = await siteGetRom(code, Guest.rom ? Guest.romSha1 : "");
+    if (r.bytes) {
+      if (sha1Hex(r.bytes) !== r.sha1) throw new Error("O jogo chegou com defeito. Tente entrar novamente.");
+      setRom(r.name, r.bytes);
+      await romStore({ name: r.name, bytes: r.bytes });
+    }
+  } catch (err) {
+    return showGuestPage("Não consegui carregar o jogo: " + (err.message || err));
+  }
   if (!SITE) try {
     const response = await fetch("/guest-rom");
     if (!response.ok) throw new Error(await response.text());
@@ -165,7 +176,7 @@ async function guestCreate() {
   $("g-msg").textContent = "Criando a sala…";
   try {
     await loadEngine();
-    await SiteRoom.create(Guest.romSha1, siteLobby);
+    await SiteRoom.create(Guest.romSha1, siteLobby, Guest.rom, Guest.romName);
   } catch (err) {
     SiteRoom.close();
     $("g-create").disabled = false;

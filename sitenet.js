@@ -99,14 +99,21 @@ const Bridge = {
       if (ws) try { ws.close(); } catch (e) {}
     };
     this.ends.add(end);
-    conn.on("open", () => {
+    // a sala local só é aberta na 1ª mensagem que não seja "me manda o jogo" (G): o pedido do
+    // jogo vem numa conexão só para isso, e é respondido aqui mesmo com a ROM da pasta roms
+    const openWs = () => {
       ws = new WebSocket(`ws://${location.host}/net?via=site`);
       ws.binaryType = "arraybuffer";
       ws.onopen = () => { for (const m of early) ws.send(m); early.length = 0; };
       ws.onmessage = (ev) => { try { chunkSend(conn, new Uint8Array(ev.data)); } catch (e) { end(); } };
       ws.onclose = end;
-    });
-    conn.on("data", chunkReader(buf => { if (ws && ws.readyState === 1) ws.send(buf); else early.push(buf); }));
+    };
+    conn.on("data", chunkReader(buf => {
+      const u8 = new Uint8Array(buf);
+      if (u8[0] === 71) return pcRom(u8).then(b => chunkSend(conn, b)).catch(() => end());
+      if (!ws) openWs();
+      if (ws.readyState === 1) ws.send(buf); else early.push(buf);
+    }));
     conn.on("close", end);
     conn.on("error", end);
   },
@@ -132,12 +139,53 @@ function packMsg(kind, payload) {
   b[0] = kind.charCodeAt(0); b.set(body, 1);
   return b;
 }
+// ---------------------------------------------------------------- o jogo vai de quem cria a sala para quem entra
+// Como a pasta roms do kirbynet: quem entra não precisa ter a ROM, ela vem direto do host
+// (de aparelho para aparelho; não passa por nenhum site). G (pedido) {have: sha1 que já tenho}
+// G (resposta) <I tamanho do cabeçalho>{name, sha1} ou {error}<bytes da ROM, só se for diferente>
+function romPacket(head, bytes) {
+  const h = enc(JSON.stringify(head)), body = bytes && head.sha1 !== head.have ? bytes : new Uint8Array(0);
+  const b = new Uint8Array(5 + h.length + body.length);
+  b[0] = 71; new DataView(b.buffer).setUint32(1, h.length, true);
+  b.set(h, 5); b.set(body, 5 + h.length);
+  return b;
+}
+const romAsk = (u8) => { try { return JSON.parse(dec(u8.subarray(1))).have || ""; } catch (e) { return ""; } };
+// host no PC (Python): a ROM da sala aberta
+async function pcRom(u8) {
+  const have = romAsk(u8);
+  try {
+    const r = await fetch("/guest-rom");
+    if (!r.ok) throw new Error(await r.text());
+    const info = await r.json();
+    const bytes = info.sha1 === have ? null : await fetchBytes(`/rom?name=${encodeURIComponent(info.name)}`);
+    return romPacket({ name: info.name, sha1: info.sha1, have }, bytes);
+  } catch (err) { return romPacket({ error: String(err.message || err) }); }
+}
+// quem entra: pede o jogo à sala (numa conexão só para isso) -> { name, sha1, bytes (null = já tenho) }
+function siteGetRom(code, have) {
+  return new Promise((ok, bad) => {
+    const t = siteSocket(code);
+    let done = false;
+    t.onopen = () => t.send(packMsg("G", enc(JSON.stringify({ have }))));
+    t.onmessage = (ev) => {
+      const u8 = new Uint8Array(ev.data);
+      if (u8[0] !== 71) return;
+      const n = new DataView(u8.buffer).getUint32(1, true), head = JSON.parse(dec(u8.subarray(5, 5 + n)));
+      done = true; t.close();
+      if (head.error) return bad(new Error(head.error));
+      ok({ name: head.name, sha1: head.sha1, bytes: u8.length > 5 + n ? u8.slice(5 + n) : null });
+    };
+    t.onclose = (ev) => { if (!done) bad(new Error(ev.reason || "Não consegui falar com a sala.")); };
+  });
+}
+
 const SiteRoom = {
-  on: false, peer: null, code: null, sha1: "", players: [], running: false, hashes: new Map(), onState: null,
-  // sha1 = ROM do host; onState(estado) atualiza a tela da sala
-  create(sha1, onState) {
+  on: false, peer: null, code: null, sha1: "", rom: null, romName: "", players: [], running: false, hashes: new Map(), onState: null,
+  // sha1/rom/romName = jogo do host (vai para quem entra); onState(estado) atualiza a tela da sala
+  create(sha1, onState, rom, romName) {
     this.close();
-    Object.assign(this, { on: true, sha1, onState, players: [], running: false, hashes: new Map() });
+    Object.assign(this, { on: true, sha1, onState, rom, romName, players: [], running: false, hashes: new Map() });
     if (typeof Peer === "undefined") return Promise.reject(new Error("Não consegui carregar a conexão por código."));
     return this.listen(0);
   },
@@ -198,7 +246,11 @@ const SiteRoom = {
     const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
     const slot = this.players.findIndex(p => p.c === c);
     const fail = (msg) => c.send("E", enc(JSON.stringify({ msg })));
-    if (kind === "H") {
+    if (kind === "G") {
+      const have = romAsk(u8);
+      c.send("G", romPacket(this.running ? { error: "A partida já começou." }
+        : { name: this.romName, sha1: this.sha1, have }, this.rom).subarray(1));
+    } else if (kind === "H") {
       let info; try { info = JSON.parse(dec(data)); } catch (e) { return; }
       if (this.running) fail("A partida já começou.");
       else if (info.rom !== this.sha1) fail("A sua ROM é diferente da do host. Todos precisam da MESMA ROM.");

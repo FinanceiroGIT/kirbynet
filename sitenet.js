@@ -65,29 +65,25 @@ function siteSocket(code) {
 
 // PC do host: recebe quem chega pelo site e liga cada um à sala (WebSocket local).
 const Bridge = {
-  peer: null, code: null, ends: new Set(), retry: 0,
-  sync(code) {   // código da sala aberta agora (ou null)
-    if (code === this.code) return;
-    this.stop();
-    this.code = code || null;
-    if (this.code && typeof Peer !== "undefined") this.start();
+  on: false, peer: null, code: null, ends: new Set(), gen: 0,
+  sync(on) {   // tem sala aberta no Python agora?
+    if (!!on === this.on) return;
+    this.on = !!on;
+    if (this.on && typeof Peer !== "undefined") this.start(); else this.stop();
   },
-  start() {
-    const peer = this.peer = new Peer(SITE_PREFIX + this.code, { debug: 0 });
-    peer.on("open", () => console.log("sala pelo site pronta:", this.code));
-    peer.on("connection", (conn) => this.link(conn));
-    peer.on("disconnected", () => {
-      // caiu do "apresentador" (internet piscou): tenta voltar; quem já entrou continua jogando
-      setTimeout(() => { if (this.peer === peer && !peer.destroyed) try { peer.reconnect(); } catch (e) {} }, 3000);
-    });
-    peer.on("error", (e) => {
-      if (this.peer !== peer) return;
-      if (e.type === "unavailable-id") { toast("⚠ Esse código de sala já está em uso. Crie a sala de novo."); return; }
-      if (["network", "server-error", "socket-error", "socket-closed"].includes(e.type) && !this.retry) {
-        // sem internet agora: tenta de novo daqui a pouco (a sala pelo IP continua funcionando)
-        this.retry = setTimeout(() => { this.retry = 0; if (this.peer === peer) { const c = this.code; this.stop(); this.code = c; this.start(); } }, 10000);
-      }
-    });
+  async start() {
+    const gen = ++this.gen;
+    try {
+      const { peer, code } = await roomListen((conn) => this.link(conn));
+      if (gen !== this.gen) return peer.destroy();
+      this.peer = peer; this.code = code;
+      keepAlive(peer, () => this.peer === peer);
+      const el = $("room-code"); if (el) el.textContent = code;
+      console.log("sala pelo site pronta:", code);
+    } catch (e) {
+      // sem internet agora: tenta de novo daqui a pouco (a sala pelo IP continua funcionando)
+      setTimeout(() => { if (gen === this.gen && this.on) this.start(); }, 10000);
+    }
   },
   link(conn) {
     let ws = null;
@@ -99,8 +95,8 @@ const Bridge = {
       if (ws) try { ws.close(); } catch (e) {}
     };
     this.ends.add(end);
-    // a sala local só é aberta na 1ª mensagem que não seja "me manda o jogo" (G): o pedido do
-    // jogo vem numa conexão só para isso, e é respondido aqui mesmo com a ROM da pasta roms
+    // a sala local só é aberta na 1ª mensagem que não seja "quem é você?" (N) ou "me manda o jogo"
+    // (G): esses vêm numa conexão só para isso e são respondidos aqui mesmo (ROM da pasta roms)
     const openWs = () => {
       ws = new WebSocket(`ws://${location.host}/net?via=site`);
       ws.binaryType = "arraybuffer";
@@ -110,6 +106,7 @@ const Bridge = {
     };
     conn.on("data", chunkReader(buf => {
       const u8 = new Uint8Array(buf);
+      if (u8[0] === 78) return chunkSend(conn, roomInfo(HS.players || [], HS.rom, HS.screen === "playing"));
       if (u8[0] === 71) return pcRom(u8).then(b => chunkSend(conn, b)).catch(() => end());
       if (!ws) openWs();
       if (ws.readyState === 1) ws.send(buf); else early.push(buf);
@@ -118,7 +115,7 @@ const Bridge = {
     conn.on("error", end);
   },
   stop() {
-    clearTimeout(this.retry); this.retry = 0;
+    this.gen++;
     for (const end of [...this.ends]) end();
     if (this.peer) { const p = this.peer; setTimeout(() => { try { p.destroy(); } catch (e) {} }, 400); }
     this.peer = null; this.code = null;
@@ -138,6 +135,85 @@ function packMsg(kind, payload) {
   const body = payload || new Uint8Array(0), b = new Uint8Array(1 + body.length);
   b[0] = kind.charCodeAt(0); b.set(body, 1);
   return b;
+}
+
+
+// ---------------------------------------------------------------- achar as salas da mesma internet
+// Como era pelo Wi-Fi: quem está na mesma internet (mesmo endereço público) vê as salas sozinho,
+// sem código. O código de uma sala é [4 letras tiradas do endereço da casa][2|3|4|5]: quem cria
+// pega o primeiro livre; quem entra testa os 4. De outra casa, ainda dá para digitar o código.
+const ROOM_DIGITS = "2345";
+let prefixP = null;
+function netPrefix() {
+  return prefixP || (prefixP = (async () => {
+    for (const url of ["https://api.ipify.org", "https://ipv4.icanhazip.com"]) {
+      try {
+        const ip = (await (await fetch(url, { cache: "no-store" })).text()).trim();
+        if (!/^\d+\.\d+\.\d+\.\d+$/.test(ip)) continue;
+        const h = sha1Hex(enc("kirbynet:" + ip)), abc = "ABCDEFGHJKMNPQRSTUVWXYZ";
+        return [0, 1, 2, 3].map(i => abc[parseInt(h.substr(i * 2, 2), 16) % abc.length]).join("");
+      } catch (e) {}
+    }
+    prefixP = null;   // sem resposta agora: tenta de novo na próxima
+    return "";
+  })());
+}
+function openPeer(id) {
+  return new Promise((ok, bad) => {
+    const peer = id ? new Peer(id, { debug: 0 }) : new Peer({ debug: 0 });
+    const t = setTimeout(() => { peer.destroy(); bad(Object.assign(new Error("sem resposta"), { type: "network" })); }, 15000);
+    peer.on("open", () => { clearTimeout(t); ok(peer); });
+    peer.on("error", (e) => { if (!peer.open) { clearTimeout(t); peer.destroy(); bad(e); } });
+  });
+}
+const netErr = (e) => ["network", "server-error", "socket-error", "socket-closed"].includes(e && e.type)
+  ? "Sem internet para criar a sala." : "Não consegui criar a sala" + (e && e.type ? " (" + e.type + ")." : ".");
+// abre a sala no "apresentador" com o primeiro código livre desta internet
+async function roomListen(onConn) {
+  const pre = await netPrefix();
+  const codes = pre ? [...ROOM_DIGITS].map(d => pre + d) : [];
+  for (let i = 0; i < 3; i++) codes.push(newCode());   // endereço desconhecido ou as 4 ocupadas
+  for (const code of codes) {
+    try {
+      const peer = await openPeer(SITE_PREFIX + code);
+      peer.on("connection", onConn);
+      return { peer, code };
+    } catch (e) { if (e.type !== "unavailable-id") throw e; }
+  }
+  throw new Error("Não consegui criar a sala.");
+}
+// caiu do "apresentador" (internet piscou): quem já entrou continua; tenta voltar para os próximos
+function keepAlive(peer, alive) {
+  peer.on("disconnected", () => setTimeout(() => { if (alive() && !peer.destroyed) try { peer.reconnect(); } catch (e) {} }, 3000));
+  peer.on("error", () => {});
+}
+// N: "quem é você?" -> {host, game, players, running}
+function roomInfo(players, game, running) {
+  return packMsg("N", enc(JSON.stringify({ host: players[0] || "?", game: game || "", players, running: !!running })));
+}
+let scanPeer = null;
+// salas abertas nesta internet agora: [{code, host, game, players, running}]
+async function scanRooms() {
+  if (typeof Peer === "undefined") return [];
+  const pre = await netPrefix();
+  if (!pre) return [];
+  if (!scanPeer || scanPeer.destroyed || scanPeer.disconnected) {
+    try { scanPeer = await openPeer(null); scanPeer.on("error", () => {}); } catch (e) { scanPeer = null; return []; }
+  }
+  const probe = (code) => new Promise(ok => {
+    const c = scanPeer.connect(SITE_PREFIX + code, { serialization: "raw", reliable: true });
+    const t = setTimeout(() => { try { c.close(); } catch (e) {} ok(null); }, 6000);
+    c.on("open", () => chunkSend(c, packMsg("N")));
+    c.on("data", chunkReader(buf => {
+      const u8 = new Uint8Array(buf);
+      if (u8[0] !== 78) return;
+      clearTimeout(t);
+      setTimeout(() => { try { c.close(); } catch (e) {} }, 200);
+      try { ok({ code, ...JSON.parse(dec(u8.subarray(1))) }); } catch (e) { ok(null); }
+    }));
+    c.on("error", () => { clearTimeout(t); ok(null); });
+  });
+  return (await Promise.all([...ROOM_DIGITS].map(d => probe(pre + d)))).filter(Boolean);
 }
 // ---------------------------------------------------------------- o jogo vai de quem cria a sala para quem entra
 // Como a pasta roms do kirbynet: quem entra não precisa ter a ROM, ela vem direto do host
@@ -181,31 +257,19 @@ function siteGetRom(code, have) {
 }
 
 const SiteRoom = {
-  on: false, peer: null, code: null, sha1: "", rom: null, romName: "", players: [], running: false, hashes: new Map(), onState: null,
+  on: false, gen: 0, peer: null, code: null, sha1: "", rom: null, romName: "", players: [], running: false, hashes: new Map(), onState: null,
   // sha1/rom/romName = jogo do host (vai para quem entra); onState(estado) atualiza a tela da sala
   create(sha1, onState, rom, romName) {
     this.close();
     Object.assign(this, { on: true, sha1, onState, rom, romName, players: [], running: false, hashes: new Map() });
-    if (typeof Peer === "undefined") return Promise.reject(new Error("Não consegui carregar a conexão por código."));
-    return this.listen(0);
-  },
-  listen(tries) {
-    this.code = newCode();
-    const peer = this.peer = new Peer(SITE_PREFIX + this.code, { debug: 0 });
-    return new Promise((ok, bad) => {
-      peer.on("open", () => { ok(); this.push(); });
-      peer.on("connection", (pc) => this.remote(pc));
-      peer.on("disconnected", () => {
-        // caiu do "apresentador" (internet piscou): quem já entrou continua; tenta voltar para os próximos
-        setTimeout(() => { if (this.peer === peer && !peer.destroyed) try { peer.reconnect(); } catch (e) {} }, 3000);
-      });
-      peer.on("error", (e) => {
-        if (this.peer !== peer || peer.open) return;
-        if (e.type === "unavailable-id" && tries < 3) { peer.destroy(); this.listen(tries + 1).then(ok, bad); }
-        else bad(new Error(["network", "server-error", "socket-error", "socket-closed"].includes(e.type)
-          ? "Sem internet para criar a sala." : "Não consegui criar a sala (" + e.type + ")."));
-      });
-    });
+    if (typeof Peer === "undefined") return Promise.reject(new Error("Não consegui carregar a conexão."));
+    const gen = this.gen;
+    return roomListen((pc) => this.remote(pc)).then(({ peer, code }) => {
+      if (gen !== this.gen || !this.on) return peer.destroy();
+      this.peer = peer; this.code = code;
+      keepAlive(peer, () => this.peer === peer);
+      this.push();
+    }, (e) => { throw new Error(e && e.type ? netErr(e) : (e.message || String(e))); });
   },
   // um jogador que chegou pelo código
   remote(pc) {
@@ -246,7 +310,8 @@ const SiteRoom = {
     const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
     const slot = this.players.findIndex(p => p.c === c);
     const fail = (msg) => c.send("E", enc(JSON.stringify({ msg })));
-    if (kind === "G") {
+    if (kind === "N") c.send("N", roomInfo(this.names(), this.romName, this.running).subarray(1));
+    else if (kind === "G") {
       const have = romAsk(u8);
       c.send("G", romPacket(this.running ? { error: "A partida já começou." }
         : { name: this.romName, sha1: this.sha1, have }, this.rom).subarray(1));
@@ -322,7 +387,7 @@ const SiteRoom = {
   },
   push() { if (this.on && this.onState) this.onState({ screen: this.running ? "playing" : "lobby", players: this.names(), code: this.code }); },
   close() {
-    this.on = false; this.running = false;
+    this.on = false; this.running = false; this.gen = (this.gen || 0) + 1;
     if (this.peer) { const p = this.peer; setTimeout(() => { try { p.destroy(); } catch (e) {} }, 400); }
     this.peer = null;
   },

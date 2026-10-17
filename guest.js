@@ -70,14 +70,20 @@ async function guestInit() {
   $("g-join").onclick = guestJoin;
   $("g-solo").onclick = guestSolo;
   $("g-create").onclick = guestCreate;
+  $("g-other").onclick = () => {
+    $("g-code-row").classList.remove("hidden"); $("g-join").classList.remove("hidden"); $("g-other").classList.add("hidden");
+  };
   if (SITE) {
-    $("g-code-row").classList.remove("hidden");
+    // como era pelo Wi-Fi: as salas da mesma internet aparecem sozinhas; o código só para outra casa
+    $("g-join").classList.add("hidden");
+    $("g-rooms").classList.remove("hidden");
     $("g-create").classList.remove("hidden");
+    roomScanLoop();
     document.querySelectorAll(".pc-only").forEach(el => el.classList.add("hidden"));
-    $("code-label").textContent = "Código da sala (os outros digitam no site):";
+    $("code-label").textContent = "Quem está na mesma internet já vê esta sala no site. De outra casa, passe o código:";
     try { $("g-code").value = localStorage.getItem("kirbynet.code") || ""; } catch (e) {}
     $("g-sub").textContent = "A ROM e o save ficam guardados neste navegador, sozinho ou junto. "
-      + "Para jogar junto: um cria a sala e passa o código; os outros digitam o código e entram.";
+      + "Para jogar junto: um aperta “Criar sala” e os outros tocam na sala que aparece aqui.";
     if (!Guest.rom) $("g-rom").textContent = "Escolha a ROM uma vez; ela fica guardada aqui";
   }
 }
@@ -98,11 +104,33 @@ async function guestSolo() {
   } catch (err) { showGuestPage("Não deu pra iniciar: " + (err.message || err)); }
 }
 
-async function guestJoin() {
-  // pelo site: entra com o código; a ROM é a escolhida aqui (o host confere se é a mesma)
-  const code = SITE ? ($("g-code").value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "") : "";
+// Salas desta internet: procura sozinho enquanto a tela inicial está aberta
+async function roomScanLoop() {
+  if (!$("guest").classList.contains("hidden") && !Play.net && !SiteRoom.on) {
+    renderRooms(await scanRooms().catch(() => []));
+  }
+  setTimeout(roomScanLoop, 5000);
+}
+function renderRooms(rooms) {
+  const list = $("g-room-list");
+  list.innerHTML = "";
+  for (const r of rooms) {
+    const b = document.createElement("button");
+    b.style.background = "var(--p4)";
+    b.textContent = `▶ Sala de ${r.host} · ${String(r.game).replace(/\.gba$/i, "")} · ${r.players.length}/4${r.running ? " (jogando)" : ""}`;
+    b.disabled = r.running || r.players.length >= 4;
+    b.onclick = () => guestJoin(r.code);
+    list.appendChild(b);
+  }
+  $("g-rooms-msg").textContent = rooms.length ? "" : "nenhuma sala aberta ainda (alguém aperta “Criar sala”)";
+}
+
+async function guestJoin(roomCode) {
+  // pelo site: a sala tocada na lista, ou o código digitado (outra casa)
+  const typed = typeof roomCode !== "string";
+  const code = SITE ? (typed ? $("g-code").value || "" : roomCode).trim().toUpperCase().replace(/[^A-Z0-9]/g, "") : "";
   if (SITE && !code) return toast("Digite o código da sala (quem criou a sala vê o código na tela).");
-  if (SITE) try { localStorage.setItem("kirbynet.code", code); } catch (e) {}
+  if (SITE && typed) try { localStorage.setItem("kirbynet.code", code); } catch (e) {}
   $("g-join").disabled = true;
   $("g-msg").textContent = "Carregando o jogo do host…";
   // pelo site: o jogo vem de quem criou a sala (só baixa se ainda não for o mesmo)
